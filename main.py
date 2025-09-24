@@ -2,19 +2,9 @@ import os
 import re
 from typing import List
 import streamlit as st
+# Fix the import - use the correct import statement
 from youtube_transcript_api import YouTubeTranscriptApi
-
-# Try to import reportlab, fallback if not available
-try:
-    from reportlab.lib.pagesizes import letter
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from io import BytesIO
-    PDF_AVAILABLE = True
-except ImportError:
-    PDF_AVAILABLE = False
-    st.warning("⚠️ PDF export not available. Install reportlab for PDF functionality.")
-
+from fpdf import FPDF
 from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -93,6 +83,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ---------------------- API KEY Setup ----------------------
+# Use environment variable or sidebar input for API key
+if "GOOGLE_API_KEY" not in st.session_state:
+    st.session_state.GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+
 # ---------------------- Initialize Session State ----------------------
 if "transcript_text" not in st.session_state:
     st.session_state.transcript_text = ""
@@ -108,8 +103,6 @@ if "last_video_url" not in st.session_state:
     st.session_state.last_video_url = ""
 if "video_title" not in st.session_state:
     st.session_state.video_title = ""
-if "GOOGLE_API_KEY" not in st.session_state:
-    st.session_state.GOOGLE_API_KEY = ""
 
 # ---------------------- Helper Functions ----------------------
 YOUTUBE_ID_REGEX = re.compile(r"(?:v=|/)([0-9A-Za-z_-]{11}).*")
@@ -125,9 +118,21 @@ def extract_video_id(url: str) -> str:
 
 def fetch_transcript(video_id: str, languages: List[str] = ["en", "en-US", "en-GB"]) -> str:
     """Fetch transcript text using youtube_transcript_api."""
-    segments = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
-    text = " ".join(seg.get("text", "") for seg in segments if seg.get("text"))
-    return re.sub(r"\s+", " ", text).strip()
+    try:
+        # Fix: Use the correct method call
+        segments = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
+        text = " ".join(seg.get("text", "") for seg in segments if seg.get("text"))
+        return re.sub(r"\s+", " ", text).strip()
+    except Exception as e:
+        # Better error handling for common issues
+        if "No transcripts were found" in str(e):
+            raise Exception(f"No transcripts available for this video. The video may not have captions or may be private.")
+        elif "Transcript is disabled" in str(e):
+            raise Exception(f"Transcripts are disabled for this video.")
+        elif "Video unavailable" in str(e):
+            raise Exception(f"Video is unavailable or doesn't exist.")
+        else:
+            raise Exception(f"Failed to fetch transcript: {str(e)}")
 
 def chunk_text(text: str, max_tokens: int = 2000) -> List[str]:
     """Simple char-based chunker as a proxy for token limits."""
@@ -233,52 +238,22 @@ def build_study_plan(summary: str, llm) -> str:
     return run_llm(plan_template.format(summary=summary), llm)
 
 def pdf_bytes_from_text(title: str, content: str) -> bytes:
-    """Render simple text into a PDF and return raw bytes using reportlab."""
-    if not PDF_AVAILABLE:
-        return b"PDF generation not available"
-    
+    """Render simple text into a PDF and return raw bytes."""
     try:
-        buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter)
-        styles = getSampleStyleSheet()
-        
-        # Create custom styles
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=16,
-            spaceAfter=12,
-            textColor='#333333'
-        )
-        
-        body_style = ParagraphStyle(
-            'CustomBody',
-            parent=styles['Normal'],
-            fontSize=11,
-            spaceAfter=6,
-            textColor='#444444'
-        )
-        
-        # Create story (content)
-        story = []
-        story.append(Paragraph(title, title_style))
-        story.append(Spacer(1, 12))
-        
-        # Split content into paragraphs
-        paragraphs = content.split('\n')
-        for para in paragraphs:
-            if para.strip():
-                # Escape HTML characters and handle special characters
-                safe_para = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                story.append(Paragraph(safe_para, body_style))
-                story.append(Spacer(1, 6))
-        
-        doc.build(story)
-        buffer.seek(0)
-        return buffer.getvalue()
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+        pdf.set_font("Arial", "B", size=16)
+        pdf.multi_cell(0, 10, txt=title)
+        pdf.ln(4)
+        pdf.set_font("Arial", size=11)
+        # Better text encoding handling
+        safe_content = content.encode("latin-1", "replace").decode("latin-1")
+        pdf.multi_cell(0, 6, txt=safe_content)
+        return bytes(pdf.output(dest="S").encode("latin-1"))
     except Exception as e:
-        st.error(f"PDF generation failed: {e}")
-        return b"PDF generation failed"
+        st.error(f"Error creating PDF: {e}")
+        return b""
 
 # ---------------------- Sidebar Configuration ----------------------
 with st.sidebar:
@@ -324,13 +299,8 @@ with st.sidebar:
     - **Smart Summarization** with structure
     - **Q&A Chat** based on content
     - **Study Plans** generation
-    - **Text Export** functionality
+    - **PDF Export** functionality
     """)
-    
-    if PDF_AVAILABLE:
-        st.success("✅ PDF Export Available")
-    else:
-        st.warning("⚠️ PDF Export Disabled")
     
     if st.button("🗑️ Clear All Data", type="secondary"):
         for key in ['transcript_text', 'summary_output', 'chat_history', 'show_study_plan', 'study_plan', 'last_video_url', 'video_title']:
@@ -392,14 +362,17 @@ if summarize_btn and video_url:
             with st.spinner("🔍 Fetching transcript..."):
                 transcript = fetch_transcript(vid, languages=["en", "en-US", "en-GB"])
             
-            st.session_state.transcript_text = transcript
-            st.session_state.last_video_url = video_url
-            st.session_state.video_title = f"YouTube Video: {vid}"
-            
-            with st.spinner("🧠 Generating summary with AI..."):
-                st.session_state.summary_output = summarize_transcript(transcript, llm)
-            
-            st.markdown('<div class="success-box">✅ Summary generated successfully!</div>', unsafe_allow_html=True)
+            if not transcript:
+                st.markdown('<div class="error-box">❌ No transcript text was found for this video.</div>', unsafe_allow_html=True)
+            else:
+                st.session_state.transcript_text = transcript
+                st.session_state.last_video_url = video_url
+                st.session_state.video_title = f"YouTube Video: {vid}"
+                
+                with st.spinner("🧠 Generating summary with AI..."):
+                    st.session_state.summary_output = summarize_transcript(transcript, llm)
+                
+                st.markdown('<div class="success-box">✅ Summary generated successfully!</div>', unsafe_allow_html=True)
             
         except Exception as e:
             st.markdown(f'<div class="error-box">❌ Error: {str(e)}</div>', unsafe_allow_html=True)
@@ -416,26 +389,14 @@ if st.session_state.summary_output:
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Text download as fallback
-        st.download_button(
-            "📄 Download Summary (TXT)",
-            data=st.session_state.summary_output,
-            file_name="lecture_summary.txt",
-            mime="text/plain",
-        )
-        
-        # PDF download if available
-        if PDF_AVAILABLE:
-            try:
-                sum_pdf = pdf_bytes_from_text("Lecture Summary", st.session_state.summary_output)
-                st.download_button(
-                    "📄 Download Summary (PDF)",
-                    data=sum_pdf,
-                    file_name="lecture_summary.pdf",
-                    mime="application/pdf",
-                )
-            except Exception as e:
-                st.error(f"PDF generation failed: {e}")
+        sum_pdf = pdf_bytes_from_text("Lecture Summary", st.session_state.summary_output)
+        if sum_pdf:  # Only show download if PDF was created successfully
+            st.download_button(
+                "📄 Download Summary PDF",
+                data=sum_pdf,
+                file_name="lecture_summary.pdf",
+                mime="application/pdf",
+            )
     
     with col2:
         if st.button("📅 Create Study Plan"):
@@ -456,26 +417,14 @@ if st.session_state.get("show_study_plan", False) and st.session_state.get("stud
     st.markdown(st.session_state.study_plan)
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # Text download
-    st.download_button(
-        "📄 Download Study Plan (TXT)",
-        data=st.session_state.study_plan,
-        file_name="study_plan.txt",
-        mime="text/plain",
-    )
-    
-    # PDF download if available
-    if PDF_AVAILABLE:
-        try:
-            plan_pdf = pdf_bytes_from_text("7-Day Study Plan", st.session_state.study_plan)
-            st.download_button(
-                "📄 Download Study Plan (PDF)",
-                data=plan_pdf,
-                file_name="study_plan.pdf",
-                mime="application/pdf",
-            )
-        except Exception as e:
-            st.error(f"PDF generation failed: {e}")
+    plan_pdf = pdf_bytes_from_text("7-Day Study Plan", st.session_state.study_plan)
+    if plan_pdf:  # Only show download if PDF was created successfully
+        st.download_button(
+            "📄 Download Study Plan PDF",
+            data=plan_pdf,
+            file_name="study_plan.pdf",
+            mime="application/pdf",
+        )
 
 # Step 4: Interactive Q&A
 st.markdown("### 💬 Step 4: Ask Questions About the Lecture")
