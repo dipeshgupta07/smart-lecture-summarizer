@@ -1,6 +1,6 @@
 streamlit>=1.28.0
 youtube-transcript-api>=0.6.0
-fpdf>=2.5.7
+reportlab>=3.6.0
 langchain>=0.1.0
-langchain-google-genai>=0.0.8
+langchain-google-genai>=1.0.0
 google-generativeai>=0.3.0
