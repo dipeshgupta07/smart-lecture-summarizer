@@ -4,7 +4,22 @@ from typing import List
 import streamlit as st
 # Fix the import - use the correct import statement
 from youtube_transcript_api import YouTubeTranscriptApi
-from fpdf import FPDF
+# Alternative PDF library that's more reliable
+try:
+    from fpdf import FPDF
+    PDF_AVAILABLE = True
+except ImportError:
+    try:
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from io import BytesIO
+        PDF_AVAILABLE = True
+        USE_REPORTLAB = True
+    except ImportError:
+        PDF_AVAILABLE = False
+        USE_REPORTLAB = False
 from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -239,18 +254,48 @@ def build_study_plan(summary: str, llm) -> str:
 
 def pdf_bytes_from_text(title: str, content: str) -> bytes:
     """Render simple text into a PDF and return raw bytes."""
+    if not PDF_AVAILABLE:
+        st.error("PDF generation not available. Install fpdf2 or reportlab.")
+        return b""
+    
     try:
-        pdf = FPDF()
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.add_page()
-        pdf.set_font("Arial", "B", size=16)
-        pdf.multi_cell(0, 10, txt=title)
-        pdf.ln(4)
-        pdf.set_font("Arial", size=11)
-        # Better text encoding handling
-        safe_content = content.encode("latin-1", "replace").decode("latin-1")
-        pdf.multi_cell(0, 6, txt=safe_content)
-        return bytes(pdf.output(dest="S").encode("latin-1"))
+        if 'USE_REPORTLAB' in globals() and USE_REPORTLAB:
+            # Use ReportLab
+            buffer = BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=letter)
+            styles = getSampleStyleSheet()
+            story = []
+            
+            # Add title
+            title_style = styles['Title']
+            story.append(Paragraph(title, title_style))
+            story.append(Spacer(1, 12))
+            
+            # Add content
+            content_style = styles['Normal']
+            # Split content into paragraphs and add each as a Paragraph
+            paragraphs = content.split('\n')
+            for para in paragraphs:
+                if para.strip():
+                    story.append(Paragraph(para.replace('\n', '<br/>'), content_style))
+                    story.append(Spacer(1, 6))
+            
+            doc.build(story)
+            buffer.seek(0)
+            return buffer.read()
+        else:
+            # Use FPDF
+            pdf = FPDF()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            pdf.add_page()
+            pdf.set_font("Arial", "B", size=16)
+            pdf.multi_cell(0, 10, txt=title)
+            pdf.ln(4)
+            pdf.set_font("Arial", size=11)
+            # Better text encoding handling
+            safe_content = content.encode("latin-1", "replace").decode("latin-1")
+            pdf.multi_cell(0, 6, txt=safe_content)
+            return bytes(pdf.output(dest="S").encode("latin-1"))
     except Exception as e:
         st.error(f"Error creating PDF: {e}")
         return b""
@@ -389,14 +434,17 @@ if st.session_state.summary_output:
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        sum_pdf = pdf_bytes_from_text("Lecture Summary", st.session_state.summary_output)
-        if sum_pdf:  # Only show download if PDF was created successfully
-            st.download_button(
-                "📄 Download Summary PDF",
-                data=sum_pdf,
-                file_name="lecture_summary.pdf",
-                mime="application/pdf",
-            )
+        if PDF_AVAILABLE:
+            sum_pdf = pdf_bytes_from_text("Lecture Summary", st.session_state.summary_output)
+            if sum_pdf:  # Only show download if PDF was created successfully
+                st.download_button(
+                    "📄 Download Summary PDF",
+                    data=sum_pdf,
+                    file_name="lecture_summary.pdf",
+                    mime="application/pdf",
+                )
+        else:
+            st.info("📄 Install fpdf2 or reportlab to enable PDF downloads")
     
     with col2:
         if st.button("📅 Create Study Plan"):
@@ -417,14 +465,17 @@ if st.session_state.get("show_study_plan", False) and st.session_state.get("stud
     st.markdown(st.session_state.study_plan)
     st.markdown('</div>', unsafe_allow_html=True)
     
-    plan_pdf = pdf_bytes_from_text("7-Day Study Plan", st.session_state.study_plan)
-    if plan_pdf:  # Only show download if PDF was created successfully
-        st.download_button(
-            "📄 Download Study Plan PDF",
-            data=plan_pdf,
-            file_name="study_plan.pdf",
-            mime="application/pdf",
-        )
+    if PDF_AVAILABLE:
+        plan_pdf = pdf_bytes_from_text("7-Day Study Plan", st.session_state.study_plan)
+        if plan_pdf:  # Only show download if PDF was created successfully
+            st.download_button(
+                "📄 Download Study Plan PDF",
+                data=plan_pdf,
+                file_name="study_plan.pdf",
+                mime="application/pdf",
+            )
+    else:
+        st.info("📄 Install fpdf2 or reportlab to enable PDF downloads")
 
 # Step 4: Interactive Q&A
 st.markdown("### 💬 Step 4: Ask Questions About the Lecture")
