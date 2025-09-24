@@ -3,7 +3,10 @@ import re
 from typing import List
 import streamlit as st
 from youtube_transcript_api import YouTubeTranscriptApi
-from fpdf import FPDF
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from io import BytesIO
 from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -225,17 +228,45 @@ def build_study_plan(summary: str, llm) -> str:
     return run_llm(plan_template.format(summary=summary), llm)
 
 def pdf_bytes_from_text(title: str, content: str) -> bytes:
-    """Render simple text into a PDF and return raw bytes."""
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_font("Arial", "B", size=16)
-    pdf.multi_cell(0, 10, txt=title)
-    pdf.ln(4)
-    pdf.set_font("Arial", size=11)
-    safe = content.encode("latin-1", "replace").decode("latin-1")
-    pdf.multi_cell(0, 6, txt=safe)
-    return bytes(pdf.output(dest="S").encode("latin-1"))
+    """Render simple text into a PDF and return raw bytes using reportlab."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+    
+    # Create custom styles
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=16,
+        spaceAfter=12,
+        textColor='#333333'
+    )
+    
+    body_style = ParagraphStyle(
+        'CustomBody',
+        parent=styles['Normal'],
+        fontSize=11,
+        spaceAfter=6,
+        textColor='#444444'
+    )
+    
+    # Create story (content)
+    story = []
+    story.append(Paragraph(title, title_style))
+    story.append(Spacer(1, 12))
+    
+    # Split content into paragraphs
+    paragraphs = content.split('\n')
+    for para in paragraphs:
+        if para.strip():
+            # Escape HTML characters and handle special characters
+            safe_para = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            story.append(Paragraph(safe_para, body_style))
+            story.append(Spacer(1, 6))
+    
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 # ---------------------- Sidebar Configuration ----------------------
 with st.sidebar:
