@@ -1,5 +1,5 @@
-streamlit>=1.36.0
-youtube-transcript-api>=0.6.2
-fpdf2>=2.7.9
-langchain-google-genai>=1.0.6
-langchain>=0.2.5
+streamlit
+youtube-transcript-api
+python-dotenv
+fpdf2
+transformers[torch]
