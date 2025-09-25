@@ -66,8 +66,13 @@ def generate_pdf(text, filename="summary_notes.pdf"):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
+    # Calculate the available width for the cell, which is the page width minus double the left margin.
+    # This ensures there's always a positive width for the text to be rendered.
+    cell_width = pdf.w - 2 * pdf.l_margin
+    if cell_width <= 0:
+        raise FPDFException("Calculated PDF cell width is zero or negative. Check page dimensions or margins.")
     for line in text.split("\n"):
-        pdf.multi_cell(0, 10, line)
+        pdf.multi_cell(cell_width, 10, line) # Use the calculated explicit width
     pdf.output(filename)
     return filename
 
