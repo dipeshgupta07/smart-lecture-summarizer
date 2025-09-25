@@ -109,59 +109,103 @@ def load_models():
 text_generator = load_models()
 
 
+def clean_generated_text(text):
+    """Clean up generated text to remove repetitions and improve quality."""
+    if not text:
+        return text
+    
+    lines = text.split('\n')
+    cleaned_lines = []
+    seen_lines = set()
+    
+    for line in lines:
+        line = line.strip()
+        if line and line not in seen_lines:
+            # Stop if we see too many repetitions of similar patterns
+            if len([l for l in seen_lines if l.startswith(line[:20])]) < 2:
+                seen_lines.add(line)
+                cleaned_lines.append(line)
+            
+    return '\n'.join(cleaned_lines[:20])  # Limit to 20 lines max
+
+
 def generate_summary(pdf_text):
     """Generate a summary from PDF text."""
     # Truncate text if too long (DistilGPT2 has token limits)
-    max_chars = 3000
+    max_chars = 2000  # Reduced for better performance
     if len(pdf_text) > max_chars:
-        pdf_text = pdf_text[:max_chars] + "..."
+        pdf_text = pdf_text[:max_chars]
     
-    prompt = f"""
-You are a helpful study assistant.
+    # Simplified prompt to reduce repetition
+    prompt = f"""Document: {pdf_text}
 
-Given the following document text:
-
-{pdf_text}
-
-Please:
-1. Summarize it in bullet points.
-2. Suggest smart, self-explanatory note headings and bullet points.
-
-Format exactly as:
-
-📋 Summary:
-- Main point 1
-- Main point 2
-- Main point 3
-
-📝 Smart Notes:
-Key Topic 1:
-- Important detail A
-- Important detail B
-
-Key Topic 2:
-- Important detail C
-- Important detail D
-"""
+Summary:
+- Key point 1:"""
     
     try:
-        results = text_generator(prompt, max_length=len(prompt) + 300, num_return_sequences=1, do_sample=True, temperature=0.7)
+        results = text_generator(
+            prompt, 
+            max_length=len(prompt) + 200,
+            num_return_sequences=1, 
+            do_sample=True, 
+            temperature=0.8,
+            repetition_penalty=1.2,  # Penalize repetitions
+            no_repeat_ngram_size=3,  # Prevent 3-gram repetitions
+            pad_token_id=text_generator.tokenizer.eos_token_id
+        )
         generated_text = results[0]["generated_text"]
-        # Extract only the generated part (after the prompt)
+        
+        # Extract only the generated part
         summary = generated_text[len(prompt):].strip()
-        return summary if summary else "Summary could not be generated. Please try with a different document."
+        
+        # Clean up repetitions
+        summary = clean_generated_text(summary)
+        
+        if not summary:
+            # Fallback: create a simple extractive summary
+            sentences = pdf_text.split('. ')[:5]
+            summary = "📋 Summary:\n" + '\n'.join([f"- {s.strip()}." for s in sentences if len(s.strip()) > 10])
+        else:
+            # Format the output properly
+            summary = f"📋 Summary:\n- Key point 1: {summary}"
+        
+        return summary
+        
     except Exception as e:
-        return f"Error generating summary: {str(e)}"
+        # Fallback: create a simple extractive summary
+        sentences = pdf_text.split('. ')[:5]
+        fallback_summary = "📋 Summary:\n" + '\n'.join([f"- {s.strip()}." for s in sentences if len(s.strip()) > 10])
+        return fallback_summary
 
 
 def generate_answer(summary, chat_history, new_question):
     """Generate an answer based on the summary and chat history."""
-    prompt = build_chat_prompt(summary, chat_history, new_question)
+    # Keep context short to avoid repetition issues
+    context = summary[:1000] if len(summary) > 1000 else summary
+    prompt = f"Document context: {context}\n\nQuestion: {new_question}\nAnswer:"
     
     try:
-        results = text_generator(prompt, max_length=len(prompt) + 150, num_return_sequences=1, do_sample=True, temperature=0.7)
+        results = text_generator(
+            prompt, 
+            max_length=len(prompt) + 100,
+            num_return_sequences=1, 
+            do_sample=True, 
+            temperature=0.8,
+            repetition_penalty=1.3,
+            no_repeat_ngram_size=2,
+            pad_token_id=text_generator.tokenizer.eos_token_id
+        )
         generated_text = results[0]["generated_text"]
         answer = generated_text[len(prompt):].strip()
+        
+        # Clean up the answer
+        answer = clean_generated_text(answer)
+        
+        # Take only the first complete sentence if it's too long
+        if len(answer) > 200:
+            sentences = answer.split('. ')
+            answer = sentences[0] + '.' if sentences else answer[:200]
+        
         return answer if answer else "I couldn't generate a proper answer. Please try rephrasing your question."
     except Exception as e:
         return f"Error generating answer: {str(e)}"
