@@ -1,125 +1,61 @@
 import os
 import re
 from typing import List
+
 import streamlit as st
-# Fix the import - use the correct import statement
 from youtube_transcript_api import YouTubeTranscriptApi
-# Alternative PDF library that's more reliable
-try:
-    from fpdf import FPDF
-    PDF_AVAILABLE = True
-except ImportError:
-    try:
-        from reportlab.pdfgen import canvas
-        from reportlab.lib.pagesizes import letter
-        from reportlab.lib.styles import getSampleStyleSheet
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-        from io import BytesIO
-        PDF_AVAILABLE = True
-        USE_REPORTLAB = True
-    except ImportError:
-        PDF_AVAILABLE = False
-        USE_REPORTLAB = False
+from fpdf import FPDF
+
 from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-# ---------------------- Configuration ----------------------
+# ---------------------- Streamlit Page Setup ----------------------
 st.set_page_config(
     page_title="🎓 Smart Lecture Summarizer",
     page_icon="📚",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Custom CSS for better styling
+# Custom CSS for a cleaner look
 st.markdown("""
 <style>
-    .main-header {
-        text-align: center;
-        padding: 2rem 0;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border-radius: 10px;
-        margin-bottom: 2rem;
+    .stApp {
+        background-color: #F0F2F6;
     }
-    
-    .step-card {
-        background: #f8f9fa;
-        padding: 1.5rem;
-        border-radius: 10px;
-        border-left: 4px solid #667eea;
-        margin: 1rem 0;
+    .stButton>button {
+        width: 100%;
     }
-    
-    .feature-box {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 0.5rem 0;
-        text-align: center;
+    .stTextInput>div>div>input {
+        background-color: #FFFFFF;
     }
-    
-    .success-box {
-        background: #d4edda;
-        border: 1px solid #c3e6cb;
-        color: #155724;
-        padding: 1rem;
-        border-radius: 5px;
-        margin: 1rem 0;
-    }
-    
-    .error-box {
-        background: #f8d7da;
-        border: 1px solid #f5c6cb;
-        color: #721c24;
-        padding: 1rem;
-        border-radius: 5px;
-        margin: 1rem 0;
-    }
-    
-    .chat-container {
-        background: #ffffff;
-        border: 1px solid #e9ecef;
-        border-radius: 10px;
-        padding: 1rem;
-        margin: 1rem 0;
-        max-height: 400px;
-        overflow-y: auto;
-    }
-    
-    .summary-container {
-        background: #f8f9fa;
-        border-left: 4px solid #28a745;
-        padding: 1.5rem;
-        margin: 1rem 0;
-        border-radius: 5px;
+    h1, h2, h3 {
+        color: #1E3A8A;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------------- API KEY Setup ----------------------
-# Use environment variable or sidebar input for API key
-if "GOOGLE_API_KEY" not in st.session_state:
-    st.session_state.GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
-# ---------------------- Initialize Session State ----------------------
-if "transcript_text" not in st.session_state:
-    st.session_state.transcript_text = ""
-if "summary_output" not in st.session_state:
-    st.session_state.summary_output = ""
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "show_study_plan" not in st.session_state:
-    st.session_state.show_study_plan = False
-if "study_plan" not in st.session_state:
-    st.session_state.study_plan = ""
-if "last_video_url" not in st.session_state:
-    st.session_state.last_video_url = ""
-if "video_title" not in st.session_state:
-    st.session_state.video_title = ""
+# ---------------------- Session State Initialization ----------------------
+def init_session_state():
+    """Initialize session state variables if they don't exist."""
+    defaults = {
+        "transcript_text": "",
+        "summary_output": "",
+        "chat_history": [],
+        "show_study_plan": False,
+        "study_plan": "",
+        "last_video_url": "",
+        "google_api_key": None,
+        "llm": None,
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-# ---------------------- Helper Functions ----------------------
+init_session_state()
+
+# ---------------------- Helpers ----------------------
 YOUTUBE_ID_REGEX = re.compile(r"(?:v=|/)([0-9A-Za-z_-]{11}).*")
 
 def extract_video_id(url: str) -> str:
@@ -131,396 +67,237 @@ def extract_video_id(url: str) -> str:
     m = YOUTUBE_ID_REGEX.search(url)
     return m.group(1) if m else ""
 
+@st.cache_data(show_spinner="Fetching transcript...")
 def fetch_transcript(video_id: str, languages: List[str] = ["en", "en-US", "en-GB"]) -> str:
     """Fetch transcript text using youtube_transcript_api."""
     try:
-        # Fix: Use the correct method call
         segments = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
         text = " ".join(seg.get("text", "") for seg in segments if seg.get("text"))
         return re.sub(r"\s+", " ", text).strip()
     except Exception as e:
-        # Better error handling for common issues
-        if "No transcripts were found" in str(e):
-            raise Exception(f"No transcripts available for this video. The video may not have captions or may be private.")
-        elif "Transcript is disabled" in str(e):
-            raise Exception(f"Transcripts are disabled for this video.")
-        elif "Video unavailable" in str(e):
-            raise Exception(f"Video is unavailable or doesn't exist.")
-        else:
-            raise Exception(f"Failed to fetch transcript: {str(e)}")
+        st.error(f"Transcript fetch error: Could not retrieve a transcript for the requested languages. Please check if the video has English captions. Details: {e}")
+        return ""
 
 def chunk_text(text: str, max_tokens: int = 2000) -> List[str]:
     """Simple char-based chunker as a proxy for token limits."""
     if not text:
         return []
-    chunk_size = max_tokens * 4  # rough char-token heuristic
+    chunk_size = max_tokens * 4
     return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
 
-def run_llm(prompt: str, llm) -> str:
-    """Invoke Gemini through LangChain chat model and return string content."""
+def run_llm(prompt: str) -> str:
+    """Invoke the LLM and return its string content."""
+    if not st.session_state.llm:
+        st.error("LLM not initialized. Please configure your API key in the sidebar.")
+        return ""
     try:
-        resp = llm.invoke(prompt)
+        resp = st.session_state.llm.invoke(prompt)
         return resp.content if hasattr(resp, "content") else str(resp)
     except Exception as e:
         return f"LLM Error: {e}"
 
-def summarize_transcript(transcript: str, llm) -> str:
+def summarize_transcript(transcript: str) -> str:
     """Summarize the transcript into structured notes."""
-    summary_template = PromptTemplate(
-        input_variables=["chunk"],
-        template=(
-            "You are an expert note-taker for university lectures.\n"
-            "Summarize the following transcript chunk into structured notes with these sections:\n"
-            "- **Key Concepts**\n"
-            "- **Definitions**\n"
-            "- **Examples**\n"
-            "- **Important Formulas** (use plain text)\n"
-            "- **Action Items**\n"
-            "- **5 Quiz Questions**\n\n"
-            "Be concise and faithful to the content. Avoid speculation.\n\n"
-            "Transcript chunk:\n{chunk}"
-        ),
+    summary_template = PromptTemplate.from_template(
+        "You are an expert note-taker. Summarize the following transcript chunk "
+        "into structured notes with sections: Key Concepts, Definitions, Examples, "
+        "Formulas, Action Items, and 5 Quiz Questions. Be concise and faithful to the content.\n\n"
+        "Transcript chunk:\n{chunk}"
     )
-
-    combine_template = PromptTemplate(
-        input_variables=["parts"],
-        template=(
-            "Combine the following partial summaries into one cohesive summary with the same sections:\n"
-            "- **Key Concepts**\n"
-            "- **Definitions**\n"
-            "- **Examples**\n"
-            "- **Important Formulas**\n"
-            "- **Action Items**\n"
-            "- **10 Quiz Questions** (merge and deduplicate)\n\n"
-            "Ensure clarity, remove duplication, and keep it comprehensive but organized.\n\n"
-            "Partial summaries:\n{parts}"
-        ),
+    combine_template = PromptTemplate.from_template(
+        "Combine these partial summaries into one cohesive summary with the same sections. "
+        "Merge and deduplicate the quiz questions. Keep the total word count under 500.\n\n"
+        "Partial summaries:\n{parts}"
     )
 
     chunks = chunk_text(transcript, max_tokens=2000)
+    if not chunks:
+        return "The transcript is empty, nothing to summarize."
+
     part_summaries = []
-    
-    progress_bar = st.progress(0)
-    for idx, ch in enumerate(chunks, 1):
-        progress = idx / len(chunks)
-        progress_bar.progress(progress, text=f"Summarizing chunk {idx}/{len(chunks)}...")
+    progress_bar = st.progress(0, text="Summarizing chunks...")
+    for i, ch in enumerate(chunks):
         prompt = summary_template.format(chunk=ch)
-        part_summaries.append(run_llm(prompt, llm))
+        part_summaries.append(run_llm(prompt))
+        progress_bar.progress((i + 1) / len(chunks), text=f"Summarizing chunk {i+1}/{len(chunks)}")
 
     progress_bar.empty()
-    
     if len(part_summaries) == 1:
         return part_summaries[0]
 
-    combined = combine_template.format(parts="\n\n---\n\n".join(part_summaries))
-    return run_llm(combined, llm)
+    with st.spinner("Combining summaries..."):
+        combined_prompt = combine_template.format(parts="\n\n---\n\n".join(part_summaries))
+        return run_llm(combined_prompt)
 
-def answer_question(question: str, transcript: str, summary: str, llm) -> str:
-    """Answer a question grounded strictly in the transcript and summary."""
-    qa_template = PromptTemplate(
-        input_variables=["question", "summary", "transcript"],
-        template=(
-            "You are a helpful teaching assistant.\n"
-            "Answer the question using ONLY the information from the lecture summary and transcript.\n"
-            "If something is not covered, reply: \"Not covered in this transcript.\" Keep answers under 150 words.\n\n"
-            "Summary:\n{summary}\n\n"
-            "Transcript:\n{transcript}\n\n"
-            "Question: {question}"
-        ),
+def answer_question(question: str, transcript: str, summary: str) -> str:
+    """Answer a question grounded in the transcript and summary."""
+    qa_template = PromptTemplate.from_template(
+        "You are a helpful teaching assistant. Answer the question using ONLY information "
+        "from the lecture summary and transcript. If the answer is not present, reply: "
+        "'This information is not covered in the lecture.' Keep answers concise.\n\n"
+        "Summary:\n{summary}\n\nTranscript:\n{transcript}\n\nQuestion: {question}"
     )
     prompt = qa_template.format(
         question=question,
         summary=summary,
-        transcript=transcript[:15000],  # safety truncation
+        transcript=transcript[:15000],
     )
-    return run_llm(prompt, llm)
+    return run_llm(prompt)
 
-def build_study_plan(summary: str, llm) -> str:
-    """Create a concise 7-day study plan based on the summary."""
-    plan_template = PromptTemplate(
-        input_variables=["summary"],
-        template=(
-            "Create a detailed 7-day study plan based on the lecture summary below. "
-            "Each day should include:\n"
-            "- **Day X Goals**\n"
-            "- **Study Tasks** with time estimates\n"
-            "- **3 Self-Check Questions**\n"
-            "- **Checkpoint Outcome**\n\n"
-            "Make it practical and achievable.\n\n"
-            "Summary:\n{summary}"
-        ),
+@st.cache_data(show_spinner="Building study plan...")
+def build_study_plan(summary: str) -> str:
+    """Create a 7-day study plan from the summary."""
+    plan_template = PromptTemplate.from_template(
+        "Create a concise 7-day study plan from the lecture summary. For each day, "
+        "include: goals, study tasks with time estimates, a 3-question self-check, "
+        "and a checkpoint outcome.\n\nSummary:\n{summary}"
     )
-    return run_llm(plan_template.format(summary=summary), llm)
+    return run_llm(plan_template.format(summary=summary))
 
 def pdf_bytes_from_text(title: str, content: str) -> bytes:
-    """Render simple text into a PDF and return raw bytes."""
-    if not PDF_AVAILABLE:
-        st.error("PDF generation not available. Install fpdf2 or reportlab.")
-        return b""
-    
-    try:
-        if 'USE_REPORTLAB' in globals() and USE_REPORTLAB:
-            # Use ReportLab
-            buffer = BytesIO()
-            doc = SimpleDocTemplate(buffer, pagesize=letter)
-            styles = getSampleStyleSheet()
-            story = []
-            
-            # Add title
-            title_style = styles['Title']
-            story.append(Paragraph(title, title_style))
-            story.append(Spacer(1, 12))
-            
-            # Add content
-            content_style = styles['Normal']
-            # Split content into paragraphs and add each as a Paragraph
-            paragraphs = content.split('\n')
-            for para in paragraphs:
-                if para.strip():
-                    story.append(Paragraph(para.replace('\n', '<br/>'), content_style))
-                    story.append(Spacer(1, 6))
-            
-            doc.build(story)
-            buffer.seek(0)
-            return buffer.read()
-        else:
-            # Use FPDF
-            pdf = FPDF()
-            pdf.set_auto_page_break(auto=True, margin=15)
-            pdf.add_page()
-            pdf.set_font("Arial", "B", size=16)
-            pdf.multi_cell(0, 10, txt=title)
-            pdf.ln(4)
-            pdf.set_font("Arial", size=11)
-            # Better text encoding handling
-            safe_content = content.encode("latin-1", "replace").decode("latin-1")
-            pdf.multi_cell(0, 6, txt=safe_content)
-            return bytes(pdf.output(dest="S").encode("latin-1"))
-    except Exception as e:
-        st.error(f"Error creating PDF: {e}")
-        return b""
+    """Render text into a PDF and return raw bytes."""
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.multi_cell(0, 10, txt=title)
+    pdf.ln(5)
+    pdf.set_font("Arial", size=11)
+    safe_content = content.encode("latin-1", "replace").decode("latin-1")
+    pdf.multi_cell(0, 7, txt=safe_content)
+    return bytes(pdf.output(dest="S").encode("latin-1"))
 
-# ---------------------- Sidebar Configuration ----------------------
+# ---------------------- Sidebar UI ----------------------
 with st.sidebar:
-    st.markdown("### ⚙️ Configuration")
-    
-    # API Key Input
-    api_key_input = st.text_input(
-        "Google API Key",
-        value=st.session_state.GOOGLE_API_KEY,
-        type="password",
-        help="Enter your Google Gemini API Key"
+    st.header("⚙️ Configuration")
+    st.session_state.google_api_key = st.text_input(
+        "Enter your Google Gemini API Key", type="password"
     )
-    
-    if api_key_input != st.session_state.GOOGLE_API_KEY:
-        st.session_state.GOOGLE_API_KEY = api_key_input
-    
-    if not st.session_state.GOOGLE_API_KEY:
-        st.error("⚠️ Please enter your Google API Key to continue")
-        st.info("Get your API key from [Google AI Studio](https://makersuite.google.com/app/apikey)")
-    
-    st.divider()
-    
-    # Model Configuration
+
     model_choice = st.selectbox(
-        "🤖 Gemini Model",
-        options=["gemini-1.5-flash", "gemini-1.5-pro"],
-        index=0,
-        help="Flash: Faster, Pro: Higher quality"
+        "Gemini Model", ["gemini-1.5-flash", "gemini-1.5-pro"],
+        index=0, help="Flash for speed, Pro for higher quality."
     )
-    
-    temperature = st.slider(
-        "🌡️ Temperature", 
-        0.0, 1.0, 0.2, 0.05,
-        help="Controls creativity: 0=focused, 1=creative"
-    )
-    
-    st.divider()
-    
-    # Features Info
-    st.markdown("### 🚀 Features")
-    st.markdown("""
-    - **Auto Transcript** extraction
-    - **Smart Summarization** with structure
-    - **Q&A Chat** based on content
-    - **Study Plans** generation
-    - **PDF Export** functionality
-    """)
-    
-    if st.button("🗑️ Clear All Data", type="secondary"):
-        for key in ['transcript_text', 'summary_output', 'chat_history', 'show_study_plan', 'study_plan', 'last_video_url', 'video_title']:
-            if key in st.session_state:
-                del st.session_state[key]
-        st.rerun()
+    temperature = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05,
+        help="Controls the creativity of the model. Lower is more deterministic.")
 
-# ---------------------- Main Application ----------------------
+    if st.button("Initialize Model"):
+        if st.session_state.google_api_key:
+            try:
+                st.session_state.llm = ChatGoogleGenerativeAI(
+                    model=model_choice,
+                    google_api_key=st.session_state.google_api_key,
+                    temperature=temperature,
+                )
+                st.success("Gemini model initialized successfully!")
+            except Exception as e:
+                st.error(f"Failed to initialize model: {e}")
+        else:
+            st.warning("Please enter your Gemini API key.")
 
-# Header
-st.markdown("""
-<div class="main-header">
-    <h1>🎓 Smart Lecture Summarizer</h1>
-    <p>Transform YouTube lectures into structured notes, study plans, and interactive Q&A</p>
-</div>
-""", unsafe_allow_html=True)
+    st.markdown("---")
+    st.info("This app uses Google's Gemini to summarize YouTube lecture videos and answer your questions about them.")
 
-# Check if API key is available
-if not st.session_state.GOOGLE_API_KEY:
-    st.error("🔑 Please enter your Google API Key in the sidebar to continue")
-    st.stop()
 
-# Initialize LLM
-try:
-    llm = ChatGoogleGenerativeAI(
-        model=model_choice,
-        google_api_key=st.session_state.GOOGLE_API_KEY,
-        temperature=temperature,
-    )
-except Exception as e:
-    st.error(f"❌ Error initializing LLM: {e}")
-    st.stop()
+# ---------------------- Main UI ----------------------
+st.title("🎓 Smart Lecture Summarizer")
+st.markdown("Your intelligent assistant for absorbing video lectures. Just paste a YouTube URL to get started.")
 
-# Step 1: URL Input
-st.markdown('<div class="step-card">', unsafe_allow_html=True)
-st.markdown("### 📎 Step 1: Enter YouTube URL")
-
-col1, col2 = st.columns([3, 1])
-with col1:
+if not st.session_state.llm:
+    st.warning("Please configure your API key and initialize the model in the sidebar to proceed.", icon="👈")
+else:
+    st.subheader("1. Enter YouTube Video URL")
     video_url = st.text_input(
-        "",
-        placeholder="https://www.youtube.com/watch?v=VIDEO_ID or https://youtu.be/VIDEO_ID",
+        "YouTube URL",
+        placeholder="e.g., https://www.youtube.com/watch?v=...",
         value=st.session_state.last_video_url,
         label_visibility="collapsed"
     )
 
-with col2:
-    summarize_btn = st.button("🎯 Analyze Video", type="primary")
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# Process Video
-if summarize_btn and video_url:
-    vid = extract_video_id(video_url)
-    if not vid:
-        st.markdown('<div class="error-box">❌ Could not extract a valid YouTube video ID from the URL.</div>', unsafe_allow_html=True)
-    else:
-        try:
-            with st.spinner("🔍 Fetching transcript..."):
-                transcript = fetch_transcript(vid, languages=["en", "en-US", "en-GB"])
-            
-            if not transcript:
-                st.markdown('<div class="error-box">❌ No transcript text was found for this video.</div>', unsafe_allow_html=True)
-            else:
-                st.session_state.transcript_text = transcript
-                st.session_state.last_video_url = video_url
-                st.session_state.video_title = f"YouTube Video: {vid}"
-                
-                with st.spinner("🧠 Generating summary with AI..."):
-                    st.session_state.summary_output = summarize_transcript(transcript, llm)
-                
-                st.markdown('<div class="success-box">✅ Summary generated successfully!</div>', unsafe_allow_html=True)
-            
-        except Exception as e:
-            st.markdown(f'<div class="error-box">❌ Error: {str(e)}</div>', unsafe_allow_html=True)
-
-# Step 2: Display Summary
-if st.session_state.summary_output:
-    st.markdown("### 📝 Step 2: Lecture Summary")
-    
-    st.markdown('<div class="summary-container">', unsafe_allow_html=True)
-    st.markdown(st.session_state.summary_output)
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Action buttons
-    col1, col2, col3 = st.columns(3)
-    
+    col1, col2 = st.columns([1, 1])
     with col1:
-        if PDF_AVAILABLE:
-            sum_pdf = pdf_bytes_from_text("Lecture Summary", st.session_state.summary_output)
-            if sum_pdf:  # Only show download if PDF was created successfully
-                st.download_button(
-                    "📄 Download Summary PDF",
-                    data=sum_pdf,
-                    file_name="lecture_summary.pdf",
-                    mime="application/pdf",
-                )
-        else:
-            st.info("📄 Install fpdf2 or reportlab to enable PDF downloads")
-    
+        summarize_btn = st.button("✨ Generate Summary", type="primary")
     with col2:
-        if st.button("📅 Create Study Plan"):
-            with st.spinner("🎯 Building personalized study plan..."):
-                plan = build_study_plan(st.session_state.summary_output, llm)
-                st.session_state.study_plan = plan
-                st.session_state.show_study_plan = True
-    
-    with col3:
-        if st.session_state.transcript_text:
-            st.success(f"✅ {len(st.session_state.transcript_text.split())} words extracted")
+        clear_btn = st.button("🗑️ Clear All")
 
-# Step 3: Study Plan
-if st.session_state.get("show_study_plan", False) and st.session_state.get("study_plan"):
-    st.markdown("### 📚 Step 3: Your Personalized Study Plan")
-    
-    st.markdown('<div class="summary-container">', unsafe_allow_html=True)
-    st.markdown(st.session_state.study_plan)
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    if PDF_AVAILABLE:
-        plan_pdf = pdf_bytes_from_text("7-Day Study Plan", st.session_state.study_plan)
-        if plan_pdf:  # Only show download if PDF was created successfully
-            st.download_button(
-                "📄 Download Study Plan PDF",
-                data=plan_pdf,
-                file_name="study_plan.pdf",
-                mime="application/pdf",
-            )
-    else:
-        st.info("📄 Install fpdf2 or reportlab to enable PDF downloads")
-
-# Step 4: Interactive Q&A
-st.markdown("### 💬 Step 4: Ask Questions About the Lecture")
-
-if not st.session_state.transcript_text:
-    st.info("👆 Please analyze a YouTube video first to enable the Q&A feature")
-else:
-    # Chat interface
-    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-    
-    if st.session_state.chat_history:
-        for i, msg in enumerate(st.session_state.chat_history):
-            if msg["role"] == "user":
-                st.markdown(f"**🙋 You:** {msg['content']}")
-            else:
-                st.markdown(f"**🤖 Assistant:** {msg['content']}")
-            if i < len(st.session_state.chat_history) - 1:
-                st.markdown("---")
-    else:
-        st.markdown("*Start a conversation by asking a question about the lecture below...*")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Chat input
-    user_question = st.chat_input("💭 Ask about the lecture content...")
-    
-    if user_question:
-        st.session_state.chat_history.append({"role": "user", "content": user_question})
-        
-        with st.spinner("🤔 Analyzing your question..."):
-            answer = answer_question(
-                user_question,
-                transcript=st.session_state.transcript_text,
-                summary=st.session_state.summary_output,
-                llm=llm
-            )
-        
-        st.session_state.chat_history.append({"role": "assistant", "content": answer})
+    if clear_btn:
+        for key in st.session_state.keys():
+            if key not in ['google_api_key', 'llm']: # Keep API key and model
+                 st.session_state[key] = "" if isinstance(st.session_state[key], str) else [] if isinstance(st.session_state[key], list) else False
         st.rerun()
 
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style="text-align: center; color: #666; padding: 2rem;">
-    <p>🎓 Smart Lecture Summarizer | Powered by Google Gemini AI</p>
-    <p><em>Transform your learning experience with AI-powered lecture analysis</em></p>
-</div>
-""", unsafe_allow_html=True)
+    if summarize_btn:
+        vid = extract_video_id(video_url)
+        if not vid:
+            st.error("Invalid YouTube URL. Please enter a valid URL.")
+        else:
+            st.session_state.last_video_url = video_url
+            transcript = fetch_transcript(vid)
+            if transcript:
+                st.session_state.transcript_text = transcript
+                st.session_state.summary_output = summarize_transcript(transcript)
+                st.success("Summary generated successfully!")
+                st.session_state.chat_history = []
+                st.session_state.show_study_plan = False
+
+# Display results
+if st.session_state.summary_output:
+    st.markdown("---")
+    st.subheader("📝 Lecture Summary")
+    st.markdown(st.session_state.summary_output)
+
+    with st.expander("View Full Transcript"):
+        st.text_area("Transcript", st.session_state.transcript_text, height=200)
+
+    # Action buttons
+    c1, c2 = st.columns(2)
+    with c1:
+        summary_pdf_bytes = pdf_bytes_from_text("Lecture Summary", st.session_state.summary_output)
+        st.download_button(
+            "⬇️ Download Summary PDF",
+            data=summary_pdf_bytes,
+            file_name="lecture_summary.pdf",
+            mime="application/pdf",
+        )
+    with c2:
+        if st.button("🗓️ Create 7-Day Study Plan"):
+            st.session_state.study_plan = build_study_plan(st.session_state.summary_output)
+            st.session_state.show_study_plan = True
+
+if st.session_state.get("show_study_plan"):
+    st.subheader("📚 Your 7-Day Study Plan")
+    st.markdown(st.session_state.study_plan)
+    plan_pdf_bytes = pdf_bytes_from_text("7-Day Study Plan", st.session_state.study_plan)
+    st.download_button(
+        "⬇️ Download Plan PDF",
+        data=plan_pdf_bytes,
+        file_name="study_plan.pdf",
+        mime="application/pdf",
+    )
+
+# Q&A Section
+if st.session_state.summary_output:
+    st.markdown("---")
+    st.subheader("💬 Ask Questions About the Lecture")
+
+    # Display chat history
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # User input
+    if user_q := st.chat_input("What would you like to know?"):
+        st.session_state.chat_history.append({"role": "user", "content": user_q})
+        with st.chat_message("user"):
+            st.markdown(user_q)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                ans = answer_question(
+                    user_q,
+                    transcript=st.session_state.transcript_text,
+                    summary=st.session_state.summary_output,
+                )
+                st.markdown(ans)
+                st.session_state.chat_history.append({"role": "assistant", "content": ans})
+
