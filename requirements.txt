@@ -1,8 +1,7 @@
-
-
-streamlit==1.39.0
-youtube-transcript-api==0.6.2
-python-dotenv==1.0.1
-fpdf2==2.7.8
-transformers==4.45.0
-torch==2.5.0
+streamlit>=1.28.0
+PyPDF2>=3.0.1
+fpdf2>=2.7.6
+transformers>=4.35.0
+torch>=2.0.0
+python-dotenv>=1.0.0
+accelerate>=0.24.0
