@@ -103,112 +103,174 @@ def build_chat_prompt(summary, chat_history, new_question):
 @st.cache_resource
 def load_models():
     """Load and cache the AI models."""
-    text_generator = pipeline("text-generation", model="distilgpt2")
-    return text_generator
+    try:
+        # Use a proper summarization model
+        summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
+        # Keep a smaller text generation model for Q&A
+        text_generator = pipeline("text-generation", model="distilgpt2")
+        return summarizer, text_generator
+    except Exception as e:
+        st.error(f"Error loading models: {e}")
+        # Fallback to a smaller summarization model
+        summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+        text_generator = pipeline("text-generation", model="distilgpt2")
+        return summarizer, text_generator
 
-text_generator = load_models()
+summarizer, text_generator = load_models()
 
 
-def clean_generated_text(text):
-    """Clean up generated text to remove repetitions and improve quality."""
-    if not text:
-        return text
+def extract_key_sentences(text, num_sentences=5):
+    """Extract key sentences using simple heuristics."""
+    sentences = text.split('. ')
     
-    lines = text.split('\n')
-    cleaned_lines = []
-    seen_lines = set()
+    # Filter out very short sentences
+    sentences = [s.strip() + '.' for s in sentences if len(s.strip()) > 20]
     
-    for line in lines:
-        line = line.strip()
-        if line and line not in seen_lines:
-            # Stop if we see too many repetitions of similar patterns
-            if len([l for l in seen_lines if l.startswith(line[:20])]) < 2:
-                seen_lines.add(line)
-                cleaned_lines.append(line)
+    # Score sentences based on length and position
+    scored_sentences = []
+    for i, sentence in enumerate(sentences[:20]):  # Only consider first 20 sentences
+        # Give higher scores to sentences in the beginning and middle
+        position_score = 1.0 if i < 3 else 0.7 if i < 10 else 0.5
+        length_score = min(len(sentence) / 100, 1.0)  # Prefer medium-length sentences
+        total_score = position_score * length_score
+        scored_sentences.append((sentence, total_score))
+    
+    # Sort by score and take top sentences
+    scored_sentences.sort(key=lambda x: x[1], reverse=True)
+    return [s[0] for s in scored_sentences[:num_sentences]]
+
+
+def create_smart_notes(text):
+    """Create structured notes from text using keyword extraction."""
+    # Split into paragraphs
+    paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 50]
+    
+    if not paragraphs:
+        paragraphs = [text[:500], text[500:1000], text[1000:1500]]
+        paragraphs = [p for p in paragraphs if p.strip()]
+    
+    notes = []
+    for i, paragraph in enumerate(paragraphs[:3]):  # Limit to 3 sections
+        # Extract first sentence as heading
+        sentences = paragraph.split('. ')
+        if sentences:
+            heading = sentences[0][:60] + "..." if len(sentences[0]) > 60 else sentences[0]
+            # Create bullet points from remaining sentences
+            bullets = []
+            for sentence in sentences[1:4]:  # Max 3 bullets per section
+                if len(sentence.strip()) > 10:
+                    bullet = sentence.strip()
+                    if not bullet.endswith('.'):
+                        bullet += '.'
+                    bullets.append(f"- {bullet}")
             
-    return '\n'.join(cleaned_lines[:20])  # Limit to 20 lines max
+            if bullets:
+                notes.append(f"{heading}:\n" + "\n".join(bullets))
+    
+    return notes
 
 
 def generate_summary(pdf_text):
-    """Generate a summary from PDF text."""
-    # Truncate text if too long (DistilGPT2 has token limits)
-    max_chars = 2000  # Reduced for better performance
-    if len(pdf_text) > max_chars:
-        pdf_text = pdf_text[:max_chars]
-    
-    # Simplified prompt to reduce repetition
-    prompt = f"""Document: {pdf_text}
-
-Summary:
-- Key point 1:"""
-    
+    """Generate a summary from PDF text using proper summarization."""
     try:
-        results = text_generator(
-            prompt, 
-            max_length=len(prompt) + 200,
-            num_return_sequences=1, 
-            do_sample=True, 
-            temperature=0.8,
-            repetition_penalty=1.2,  # Penalize repetitions
-            no_repeat_ngram_size=3,  # Prevent 3-gram repetitions
-            pad_token_id=text_generator.tokenizer.eos_token_id
-        )
-        generated_text = results[0]["generated_text"]
+        # Clean and prepare text
+        text = pdf_text.strip()
+        if len(text) < 100:
+            return "Document too short to summarize effectively."
         
-        # Extract only the generated part
-        summary = generated_text[len(prompt):].strip()
-        
-        # Clean up repetitions
-        summary = clean_generated_text(summary)
-        
-        if not summary:
-            # Fallback: create a simple extractive summary
-            sentences = pdf_text.split('. ')[:5]
-            summary = "📋 Summary:\n" + '\n'.join([f"- {s.strip()}." for s in sentences if len(s.strip()) > 10])
+        # Use AI summarization for main summary
+        summary_text = ""
+        if len(text) > 1024:  # BART has token limits
+            # Split text into chunks
+            chunks = [text[i:i+1024] for i in range(0, len(text), 1024)]
+            chunk_summaries = []
+            
+            for chunk in chunks[:3]:  # Limit to first 3 chunks
+                if len(chunk.strip()) > 100:
+                    try:
+                        result = summarizer(chunk, max_length=100, min_length=30, do_sample=False)
+                        chunk_summaries.append(result[0]['summary_text'])
+                    except Exception:
+                        # Fallback to extractive for this chunk
+                        key_sentences = extract_key_sentences(chunk, 2)
+                        chunk_summaries.extend(key_sentences)
+            
+            summary_text = " ".join(chunk_summaries)
         else:
-            # Format the output properly
-            summary = f"📋 Summary:\n- Key point 1: {summary}"
+            # Summarize the whole text
+            try:
+                result = summarizer(text, max_length=150, min_length=50, do_sample=False)
+                summary_text = result[0]['summary_text']
+            except Exception:
+                # Fallback to extractive summarization
+                key_sentences = extract_key_sentences(text, 5)
+                summary_text = " ".join(key_sentences)
         
-        return summary
+        # Extract key points for bullet format
+        key_sentences = extract_key_sentences(text, 5)
+        
+        # Create smart notes
+        smart_notes = create_smart_notes(text)
+        
+        # Format the final output
+        formatted_summary = "📋 Summary:\n"
+        if summary_text:
+            formatted_summary += f"- {summary_text}\n\n"
+        
+        # Add key points
+        for sentence in key_sentences[:4]:
+            formatted_summary += f"- {sentence}\n"
+        
+        # Add smart notes section
+        if smart_notes:
+            formatted_summary += "\n📝 Smart Notes:\n"
+            for note in smart_notes:
+                formatted_summary += f"\n{note}\n"
+        
+        return formatted_summary
         
     except Exception as e:
-        # Fallback: create a simple extractive summary
-        sentences = pdf_text.split('. ')[:5]
-        fallback_summary = "📋 Summary:\n" + '\n'.join([f"- {s.strip()}." for s in sentences if len(s.strip()) > 10])
+        # Complete fallback to extractive summarization
+        key_sentences = extract_key_sentences(pdf_text, 6)
+        fallback_summary = "📋 Summary:\n" + '\n'.join([f"- {s}" for s in key_sentences])
         return fallback_summary
 
 
 def generate_answer(summary, chat_history, new_question):
     """Generate an answer based on the summary and chat history."""
-    # Keep context short to avoid repetition issues
-    context = summary[:1000] if len(summary) > 1000 else summary
-    prompt = f"Document context: {context}\n\nQuestion: {new_question}\nAnswer:"
+    # Keep context short and relevant
+    context = summary[:800] if len(summary) > 800 else summary
+    
+    # Simple prompt for better results
+    prompt = f"Context: {context}\n\nQuestion: {new_question}\nAnswer:"
     
     try:
         results = text_generator(
             prompt, 
-            max_length=len(prompt) + 100,
+            max_length=len(prompt) + 80,
             num_return_sequences=1, 
             do_sample=True, 
-            temperature=0.8,
-            repetition_penalty=1.3,
+            temperature=0.7,
+            repetition_penalty=1.2,
             no_repeat_ngram_size=2,
             pad_token_id=text_generator.tokenizer.eos_token_id
         )
         generated_text = results[0]["generated_text"]
         answer = generated_text[len(prompt):].strip()
         
-        # Clean up the answer
-        answer = clean_generated_text(answer)
-        
-        # Take only the first complete sentence if it's too long
-        if len(answer) > 200:
+        # Clean up the answer and limit length
+        if answer:
+            # Take only the first sentence or two
             sentences = answer.split('. ')
-            answer = sentences[0] + '.' if sentences else answer[:200]
-        
-        return answer if answer else "I couldn't generate a proper answer. Please try rephrasing your question."
+            answer = '. '.join(sentences[:2])
+            if not answer.endswith('.'):
+                answer += '.'
+            return answer
+        else:
+            return "I couldn't find relevant information in the document to answer this question."
+            
     except Exception as e:
-        return f"Error generating answer: {str(e)}"
+        return "Sorry, I encountered an error while generating the answer. Please try rephrasing your question."
 
 
 # ---------------------- Streamlit UI ----------------------
