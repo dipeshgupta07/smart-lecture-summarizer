@@ -76,11 +76,13 @@ def generate_pdf(text, filename="summary_notes.pdf"):
     cell_width = pdf.w - 30  # Total width minus left and right margins
     
     # Split text into lines and add to PDF
-    for line in text.split("\n"):
+    lines = text.split("\n")
+    for line in lines:
         if line.strip():  # Only add non-empty lines
             # Handle special characters by replacing unsupported ones
             clean_line = line.encode('latin-1', 'replace').decode('latin-1')
-            pdf.multi_cell(cell_width, 8, clean_line)
+            # Use multi_cell with width=0 to use full available width
+            pdf.multi_cell(0, 8, clean_line, align='L')
         else:
             # Add spacing for empty lines
             pdf.ln(4)
