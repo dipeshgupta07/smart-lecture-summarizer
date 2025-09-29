@@ -308,8 +308,7 @@ if uploaded_file is not None:
             with st.spinner("⏳ Generating summary and smart notes..."):
                 try:
                     summary = generate_summary(st.session_state.pdf_text)
-                    clean_summary = remove_emojis(summary) 
-                    st.session_state.summary_output = clean_summary
+                    st.session_state.summary_output = summary
                     st.success("✅ Summary and Notes Generated!")
                 except Exception as e:
                     st.error(f"❌ Summarization Error: {e}")
@@ -321,8 +320,11 @@ if uploaded_file is not None:
             
             # Download PDF button
             try:
+                # Remove emojis only for PDF generation, not for display
+                pdf_text = remove_emojis(st.session_state.summary_output)
+                
                 # Get the PDF content as bytes
-                pdf_bytes = generate_pdf(st.session_state.summary_output)
+                pdf_bytes = generate_pdf(pdf_text)
                 
                 # Use the returned bytes data for the download button
                 st.download_button(
