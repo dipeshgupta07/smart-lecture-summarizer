@@ -62,25 +62,32 @@ def clean_text(text):
 
 
 def generate_pdf(text, filename="summary_notes.pdf"):
-    """Generate a PDF file from text and return as bytes."""
+    """Generate a PDF file from text."""
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
+    pdf.set_font("Arial", size=11)
+    
+    # Set margins
+    pdf.set_left_margin(15)
+    pdf.set_right_margin(15)
+    pdf.set_auto_page_break(auto=True, margin=15)
     
     # Calculate the available width for the cell
-    cell_width = pdf.w - 2 * pdf.l_margin
-    if cell_width <= 0:
-        raise Exception("Calculated PDF cell width is zero or negative. Check page dimensions or margins.")
+    cell_width = pdf.w - 30  # Total width minus left and right margins
     
     # Split text into lines and add to PDF
     for line in text.split("\n"):
         if line.strip():  # Only add non-empty lines
             # Handle special characters by replacing unsupported ones
             clean_line = line.encode('latin-1', 'replace').decode('latin-1')
-            pdf.multi_cell(cell_width, 10, clean_line)
+            pdf.multi_cell(cell_width, 8, clean_line)
+        else:
+            # Add spacing for empty lines
+            pdf.ln(4)
     
-    # Return PDF as bytes instead of saving to file
-    return pdf.output(dest='S').encode('latin-1')
+    # Save to file
+    pdf.output(filename)
+    return filename
 
 
 # ---------------------- Model Setup ----------------------
@@ -281,13 +288,17 @@ if uploaded_file is not None:
 
             # Download PDF button
             try:
-                pdf_bytes = generate_pdf(st.session_state.summary_output)
-                st.download_button(
-                    label="💾 Download Summary as PDF",
-                    data=pdf_bytes,
-                    file_name="Document_Summary.pdf",
-                    mime="application/pdf",
-                )
+                pdf_file = generate_pdf(st.session_state.summary_output)
+                with open(pdf_file, "rb") as file:
+                    st.download_button(
+                        label="💾 Download Summary as PDF",
+                        data=file,
+                        file_name="Document_Summary.pdf",
+                        mime="application/pdf",
+                    )
+                # Clean up the temporary file
+                if os.path.exists(pdf_file):
+                    os.remove(pdf_file)
             except Exception as e:
                 st.warning(f"PDF generation failed: {e}")
 
