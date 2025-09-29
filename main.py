@@ -63,17 +63,15 @@ def clean_text(text):
 
 def generate_pdf(text, filename="summary_notes.pdf"):
     """Generate a PDF file from text."""
-    pdf = FPDF()
+    from fpdf import FPDF
+    
+    pdf = FPDF(format='A4')
     pdf.add_page()
-    pdf.set_font("Arial", size=11)
-    
-    # Set margins
-    pdf.set_left_margin(15)
-    pdf.set_right_margin(15)
     pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_font("Arial", size=10)
     
-    # Calculate the available width for the cell
-    cell_width = pdf.w - 30  # Total width minus left and right margins
+    # Set margins explicitly
+    pdf.set_margins(left=15, top=15, right=15)
     
     # Split text into lines and add to PDF
     lines = text.split("\n")
@@ -81,11 +79,11 @@ def generate_pdf(text, filename="summary_notes.pdf"):
         if line.strip():  # Only add non-empty lines
             # Handle special characters by replacing unsupported ones
             clean_line = line.encode('latin-1', 'replace').decode('latin-1')
-            # Use multi_cell with width=0 to use full available width
-            pdf.multi_cell(0, 8, clean_line, align='L')
+            # multi_cell with width 0 uses the available width between margins
+            pdf.multi_cell(w=0, h=7, txt=clean_line, border=0, align='L')
         else:
             # Add spacing for empty lines
-            pdf.ln(4)
+            pdf.ln(3)
     
     # Save to file
     pdf.output(filename)
