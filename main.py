@@ -17,9 +17,6 @@ st.title("📄 Smart PDF Summarizer")
 for key, default in {
     "pdf_text": "",
     "summary_output": "",
-    "chat_history": [],
-    "show_study_plan": False,
-    "question_submitted": False,
     "last_pdf_name": "",
 }.items():
     if key not in st.session_state:
@@ -65,7 +62,7 @@ def clean_text(text):
 
 
 def generate_pdf(text, filename="summary_notes.pdf"):
-    """Generate a PDF file from text."""
+    """Generate a PDF file from text and return as bytes."""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
@@ -78,25 +75,12 @@ def generate_pdf(text, filename="summary_notes.pdf"):
     # Split text into lines and add to PDF
     for line in text.split("\n"):
         if line.strip():  # Only add non-empty lines
-            pdf.multi_cell(cell_width, 10, line.encode('latin-1', 'replace').decode('latin-1'))
+            # Handle special characters by replacing unsupported ones
+            clean_line = line.encode('latin-1', 'replace').decode('latin-1')
+            pdf.multi_cell(cell_width, 10, clean_line)
     
-    pdf.output(filename)
-    return filename
-
-
-def build_chat_prompt(summary, chat_history, new_question):
-    """Build a prompt for the chat functionality."""
-    prompt = f"""You are a helpful assistant answering questions based on the following document summary:
-
-{summary}
-
-"""
-    if chat_history:
-        prompt += "Here is the conversation so far:\n"
-        for q, a in chat_history:
-            prompt += f"Q: {q}\nA: {a}\n"
-    prompt += f"\nQ: {new_question}\n\nAnswer:"
-    return prompt
+    # Return PDF as bytes instead of saving to file
+    return pdf.output(dest='S').encode('latin-1')
 
 
 # ---------------------- Model Setup ----------------------
@@ -106,17 +90,14 @@ def load_models():
     try:
         # Use a proper summarization model
         summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-        # Keep a smaller text generation model for Q&A
-        text_generator = pipeline("text-generation", model="distilgpt2")
-        return summarizer, text_generator
+        return summarizer
     except Exception as e:
         st.error(f"Error loading models: {e}")
         # Fallback to a smaller summarization model
         summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
-        text_generator = pipeline("text-generation", model="distilgpt2")
-        return summarizer, text_generator
+        return summarizer
 
-summarizer, text_generator = load_models()
+summarizer = load_models()
 
 
 def extract_key_sentences(text, num_sentences=5):
@@ -236,45 +217,8 @@ def generate_summary(pdf_text):
         return fallback_summary
 
 
-def generate_answer(summary, chat_history, new_question):
-    """Generate an answer based on the summary and chat history."""
-    # Keep context short and relevant
-    context = summary[:800] if len(summary) > 800 else summary
-    
-    # Simple prompt for better results
-    prompt = f"Context: {context}\n\nQuestion: {new_question}\nAnswer:"
-    
-    try:
-        results = text_generator(
-            prompt, 
-            max_length=len(prompt) + 80,
-            num_return_sequences=1, 
-            do_sample=True, 
-            temperature=0.7,
-            repetition_penalty=1.2,
-            no_repeat_ngram_size=2,
-            pad_token_id=text_generator.tokenizer.eos_token_id
-        )
-        generated_text = results[0]["generated_text"]
-        answer = generated_text[len(prompt):].strip()
-        
-        # Clean up the answer and limit length
-        if answer:
-            # Take only the first sentence or two
-            sentences = answer.split('. ')
-            answer = '. '.join(sentences[:2])
-            if not answer.endswith('.'):
-                answer += '.'
-            return answer
-        else:
-            return "I couldn't find relevant information in the document to answer this question."
-            
-    except Exception as e:
-        return "Sorry, I encountered an error while generating the answer. Please try rephrasing your question."
-
-
 # ---------------------- Streamlit UI ----------------------
-st.markdown("Upload a PDF document to get an AI-generated summary and ask questions about it!")
+st.markdown("Upload a PDF document to get an AI-generated summary with smart notes!")
 
 # File uploader
 uploaded_file = st.file_uploader(
@@ -288,9 +232,6 @@ if uploaded_file is not None:
     if uploaded_file.name != st.session_state.last_pdf_name:
         st.session_state.last_pdf_name = uploaded_file.name
         st.session_state.summary_output = ""
-        st.session_state.chat_history = []
-        st.session_state.show_study_plan = False
-        st.session_state.question_submitted = False
         
         with st.spinner("📖 Extracting text from PDF..."):
             try:
@@ -329,9 +270,6 @@ if uploaded_file is not None:
                     summary = generate_summary(st.session_state.pdf_text)
                     clean_summary = remove_emojis(summary)
                     st.session_state.summary_output = clean_summary
-                    st.session_state.chat_history = []
-                    st.session_state.show_study_plan = False
-                    st.session_state.question_submitted = False
                     st.success("✅ Summary and Notes Generated!")
                 except Exception as e:
                     st.error(f"❌ Summarization Error: {e}")
@@ -343,52 +281,15 @@ if uploaded_file is not None:
 
             # Download PDF button
             try:
-                pdf_file = generate_pdf(st.session_state.summary_output)
-                with open(pdf_file, "rb") as file:
-                    st.download_button(
-                        label="💾 Download Summary as PDF",
-                        data=file,
-                        file_name="Document_Summary.pdf",
-                        mime="application/pdf",
-                    )
+                pdf_bytes = generate_pdf(st.session_state.summary_output)
+                st.download_button(
+                    label="💾 Download Summary as PDF",
+                    data=pdf_bytes,
+                    file_name="Document_Summary.pdf",
+                    mime="application/pdf",
+                )
             except Exception as e:
                 st.warning(f"PDF generation failed: {e}")
-
-            # Chat interface
-            st.divider()
-            st.subheader("💬 Ask questions about the document")
-
-            with st.form(key="chat_form", clear_on_submit=True):
-                question = st.text_input(
-                    "Ask a question about the document:", 
-                    key="chat_input",
-                    placeholder="e.g., What are the main conclusions?"
-                )
-                submit_button = st.form_submit_button("❓ Get Answer")
-
-                if submit_button:
-                    if question.strip() == "":
-                        st.warning("Please enter a question!")
-                    else:
-                        with st.spinner("🤖 Thinking..."):
-                            try:
-                                answer = generate_answer(
-                                    st.session_state.summary_output,
-                                    st.session_state.chat_history,
-                                    question,
-                                )
-                                st.session_state.chat_history.append((question, answer))
-                                st.session_state.question_submitted = True
-                            except Exception as e:
-                                st.error(f"❌ Error getting answer: {e}")
-
-            # Display chat history
-            if st.session_state.chat_history:
-                st.markdown("### 💭 Conversation History")
-                for q, a in reversed(st.session_state.chat_history):
-                    st.markdown(f"**Q:** {q}")
-                    st.markdown(f"**A:** {a}")
-                    st.markdown("---")
 
 else:
     st.info("👆 Please upload a PDF file to get started!")
@@ -399,4 +300,3 @@ st.markdown("🔧 **Tips for better results:**")
 st.markdown("- Upload PDFs with clear, readable text")
 st.markdown("- Avoid heavily formatted documents or scanned images")
 st.markdown("- For large documents, the summarizer works on the first ~3000 characters")
-st.markdown("- Ask specific questions about the content for better answers")
