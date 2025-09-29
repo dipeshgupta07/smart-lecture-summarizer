@@ -33,8 +33,8 @@ def extract_text_from_pdf(pdf_file):
         for page_num in range(len(pdf_reader.pages)):
             page = pdf_reader.pages[page_num]
             text += page.extract_text() + "\n"
-                if not text.strip():
-            raise ValueError("No text could be extracted from the PDF. The PDF might contain only images or be password protected.")
+            if not text.strip():
+                raise ValueError("No text could be extracted from the PDF. The PDF might contain only images or be password protected.")
                 return text.strip()
     except Exception as e:
         raise ValueError(f"Error reading PDF: {str(e)}")
