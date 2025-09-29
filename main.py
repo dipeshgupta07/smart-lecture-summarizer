@@ -70,19 +70,55 @@ def generate_pdf(text, filename="Document_Summary.pdf"):
     pdf = FPDF()
     pdf.add_page()
     
+    # Set proper margins to avoid spacing issues
+    pdf.set_left_margin(10)
+    pdf.set_right_margin(10)
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
     # Use a standard font like Arial
     pdf.set_font("Arial", size=10)
 
+    # Clean and prepare text
+    # Remove markdown formatting that might cause issues
+    text = text.replace('**', '')
+    text = text.replace('*', '')
+    text = text.replace('###', '')
+    text = text.replace('##', '')
+    text = text.replace('#', '')
+    
+    # Remove special unicode characters and emojis more aggressively
+    text = re.sub(r'[^\x00-\x7F]+', ' ', text)
+    
     # Split text into lines
     lines = text.split("\n")
     
     for line in lines:
         if line.strip():
-            # Remove any characters that can't be encoded in latin-1
-            clean_line = line.encode('latin-1', 'replace').decode('latin-1')
-            
-            # multi_cell automatically wraps text.
-            pdf.multi_cell(0, 6, clean_line)
+            try:
+                # Clean the line - remove any problematic characters
+                clean_line = line.strip()
+                
+                # Replace common problematic characters
+                clean_line = clean_line.replace('–', '-')
+                clean_line = clean_line.replace('—', '-')
+                clean_line = clean_line.replace('"', '"')
+                clean_line = clean_line.replace('"', '"')
+                clean_line = clean_line.replace(''', "'")
+                clean_line = clean_line.replace(''', "'")
+                
+                # Encode and decode to ensure latin-1 compatibility
+                clean_line = clean_line.encode('latin-1', 'replace').decode('latin-1')
+                
+                # Skip if line is empty after cleaning
+                if not clean_line:
+                    continue
+                
+                # Use multi_cell with proper width (0 = full width)
+                pdf.multi_cell(0, 6, clean_line)
+            except Exception as e:
+                # If a specific line fails, skip it and continue
+                print(f"Skipped problematic line: {e}")
+                continue
         else:
             # Add spacing for empty lines
             pdf.ln(3)
