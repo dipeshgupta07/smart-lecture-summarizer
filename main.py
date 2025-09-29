@@ -2,7 +2,10 @@ import streamlit as st
 from dotenv import load_dotenv
 import os
 import re
-from fpdf import FPDF
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
 from transformers import pipeline
 import PyPDF2
 import io
@@ -75,80 +78,86 @@ def clean_text(text):
 
 def generate_pdf(text, filename="Document_Summary.pdf"):
     """
-    Generate a PDF file from text using FPDF, handling encoding issues 
-    and returning the content as bytes using io.BytesIO (memory-based).
+    Generate a PDF file from text using ReportLab, which handles Unicode better.
+    Returns the content as bytes.
     """
-    pdf = FPDF()
-    pdf.add_page()
-    
-    # Set proper margins to avoid spacing issues
-    pdf.set_left_margin(10)
-    pdf.set_right_margin(10)
-    pdf.set_auto_page_break(auto=True, margin=15)
-    
-    # Use a standard font like Arial
-    pdf.set_font("Arial", size=10)
-
-    # Clean and prepare text
-    # Remove markdown formatting that might cause issues
-    text = text.replace('**', '')
-    text = text.replace('*', '')
-    text = text.replace('###', '')
-    text = text.replace('##', '')
-    text = text.replace('#', '')
-    
-    # Remove special unicode characters and emojis more aggressively
-    text = re.sub(r'[^\x00-\x7F]+', ' ', text)
-    
-    # Split text into lines
-    lines = text.split("\n")
-    
-    for line in lines:
-        if line.strip():
-            try:
-                # Clean the line - remove any problematic characters
-                clean_line = line.strip()
-                
-                # Replace common problematic characters
-                clean_line = clean_line.replace('–', '-')
-                clean_line = clean_line.replace('—', '-')
-                clean_line = clean_line.replace('"', '"')
-                clean_line = clean_line.replace('"', '"')
-                clean_line = clean_line.replace(''', "'")
-                clean_line = clean_line.replace(''', "'")
-                
-                # Encode and decode to ensure latin-1 compatibility
-                clean_line = clean_line.encode('latin-1', 'replace').decode('latin-1')
-                
-                # Skip if line is empty after cleaning
-                if not clean_line:
-                    continue
-                
-                # Use multi_cell with proper width (0 = full width)
-                pdf.multi_cell(0, 6, clean_line)
-            except Exception as e:
-                # If a specific line fails, skip it and continue
-                print(f"Skipped problematic line: {e}")
-                continue
-        else:
-            # Add spacing for empty lines
-            pdf.ln(3)
-    
-    # Create an in-memory bytes buffer
+    # Create a bytes buffer
     pdf_buffer = io.BytesIO()
     
-    # Get PDF content as bytes and write to buffer
-    pdf_output = pdf.output(dest='S')
+    # Create the PDF document
+    doc = SimpleDocTemplate(
+        pdf_buffer,
+        pagesize=letter,
+        rightMargin=72,
+        leftMargin=72,
+        topMargin=72,
+        bottomMargin=18,
+    )
     
-    # Handle different FPDF versions
-    if isinstance(pdf_output, str):
-        # Older FPDF versions return string
-        pdf_buffer.write(pdf_output.encode('latin-1'))
-    else:
-        # Newer FPDF versions return bytes
-        pdf_buffer.write(pdf_output)
+    # Container for the 'Flowable' objects
+    elements = []
     
-    # Get the bytes value
+    # Get styles
+    styles = getSampleStyleSheet()
+    
+    # Create custom styles
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=16,
+        textColor='darkblue',
+        spaceAfter=12,
+    )
+    
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=12,
+        textColor='darkblue',
+        spaceAfter=10,
+        spaceBefore=10,
+    )
+    
+    body_style = ParagraphStyle(
+        'CustomBody',
+        parent=styles['BodyText'],
+        fontSize=10,
+        spaceAfter=6,
+    )
+    
+    # Add title
+    elements.append(Paragraph("Document Summary", title_style))
+    elements.append(Spacer(1, 0.2*inch))
+    
+    # Process the text
+    lines = text.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            elements.append(Spacer(1, 0.1*inch))
+            continue
+        
+        # Check if it's a heading (contains ** markers or specific keywords)
+        if '**' in line:
+            # Remove markdown bold markers
+            line = line.replace('**', '')
+            elements.append(Paragraph(line, heading_style))
+        elif line.startswith('- '):
+            # Bullet point
+            line = '• ' + line[2:]
+            elements.append(Paragraph(line, body_style))
+        elif line.startswith('---'):
+            # Separator
+            elements.append(Spacer(1, 0.1*inch))
+        else:
+            # Regular text
+            elements.append(Paragraph(line, body_style))
+    
+    # Build PDF
+    doc.build(elements)
+    
+    # Get the value from the buffer
     pdf_buffer.seek(0)
     return pdf_buffer.getvalue()
 
