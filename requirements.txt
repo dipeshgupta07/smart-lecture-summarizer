@@ -1,9 +1,8 @@
-streamlit==1.31.0
-python-dotenv==1.0.0
-reportlab==4.0.9
-transformers==4.36.2
-torch==2.1.2
-PyPDF2==3.0.1
-sentencepiece==0.1.99
-protobuf==4.25.2
-accelerate==0.25.0
+streamlit>=1.31.0
+python-dotenv>=1.0.0
+reportlab>=4.0.0
+transformers>=4.36.0
+torch>=2.0.0
+PyPDF2>=3.0.0
+sentencepiece>=0.1.99
+protobuf>=4.25.0
